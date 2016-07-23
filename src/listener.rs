@@ -5,9 +5,7 @@ use crossbeam::sync::MsQueue;
 use hyper::{Control, Decoder, Encoder, Next, RequestUri};
 use hyper::net::{HttpStream, HttpListener};
 use hyper::server::{Server, Handler, Request, Response};
-use hyper::status::StatusCode;
-use hyper::header::ContentLength;
-use worker::{WorkerCommand, RequestToken};
+use worker::{WorkerCommand, RequestToken, WorkerResponse};
 
 pub fn run_listener(listener: HttpListener, queue: Arc<MsQueue<WorkerCommand>>) {
     let factory = move |ctrl| {
@@ -31,8 +29,9 @@ pub struct HyperHandler {
     uri: Option<RequestUri>,
     ctrl: Option<Control>,
     queue: Arc<MsQueue<WorkerCommand>>,
-    receiver: Option<Receiver<Vec<u8>>>,
-    data: Option<Vec<u8>>,
+    receiver: Option<Receiver<WorkerResponse>>,
+
+    responses: Vec<WorkerResponse>,
 }
 
 impl HyperHandler {
@@ -42,8 +41,20 @@ impl HyperHandler {
             ctrl: Some(ctrl),
             queue: queue,
             receiver: None,
-            data: None,
+
+            responses: Vec::new(),
         }
+    }
+
+    fn recv_into_responses(&mut self) {
+        // .pop() needs to return the oldest message
+        self.responses.reverse();
+
+        while let Ok(received) = self.receiver.as_ref().unwrap().try_recv() {
+            self.responses.push(received);
+        }
+
+        self.responses.reverse();
     }
 }
 
@@ -74,21 +85,46 @@ impl Handler<HttpStream> for HyperHandler {
     }
 
     fn on_response(&mut self, response: &mut Response) -> Next {
-        // We arrived here after being notified, so there should be data in the receiver
-        self.data = Some(self.receiver.as_ref().unwrap().recv().unwrap());
+        self.recv_into_responses();
 
-        // Build up the response header
-        response.set_status(StatusCode::Ok);
-        let headers = response.headers_mut();
-        headers.set(ContentLength(self.data.as_ref().unwrap().len() as u64));
+        // We arrived here after being notified, so we should have the header
+        let received = self.responses.pop().unwrap();
+        let (status_code, headers) = if let WorkerResponse::Header(s, h) = received {
+            (s, h)
+        } else {
+            panic!("Unexpected worker response {:?}", received);
+        };
 
-        Next::write()
+        // Send the response header
+        response.set_status(status_code);
+        let rheaders = response.headers_mut();
+        *rheaders = headers;
+
+        // If we have any messages left, immediately go on to handle them, if not, wait
+        if self.responses.len() != 0 {
+            Next::write()
+        } else {
+            Next::wait()
+        }
     }
 
     fn on_response_writable(&mut self, response: &mut Encoder<HttpStream>) -> Next {
-        let bytes = self.data.as_ref().unwrap();
-        response.write(bytes).unwrap();
+        self.recv_into_responses();
 
-        Next::end()
+        // Keep handling every bit of data we've received
+        while let Some(received) = self.responses.pop() {
+            // Make sure we got the correct kind of message we expect here
+            let data = match received {
+                WorkerResponse::Data(data) => data,
+                WorkerResponse::Finish => return Next::end(),
+                _ => panic!("Unexpected worker response {:?}", received)
+            };
+
+            // Send the data to the client
+            response.write(&data).unwrap();
+        }
+
+        // The finish gets sent to us externally
+        Next::wait()
     }
 }
