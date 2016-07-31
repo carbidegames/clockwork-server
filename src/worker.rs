@@ -5,6 +5,7 @@ use hyper::{Control, Next, RequestUri};
 use webapp::{Application, Request, Responder, BodyResponder};
 use webapp::header::Headers;
 use webapp::status::StatusCode;
+use webapp::method::Method;
 
 pub fn run_worker<A: Application>(queue: Arc<MsQueue<WorkerCommand>>, application: Arc<A>) {
     // TODO: Catch panics gracefully
@@ -21,12 +22,14 @@ fn handle_request<A: Application>(token: RequestToken, application: &A) {
     // Get the path from the request
     let path = match token.uri() {
         &RequestUri::AbsolutePath(ref path) => path.to_string(),
-        other => panic!("Swallowed request uri {:?}, not implemented!", other)
+        // TODO: IMPORTANT FOR PRODUCTION do not panic
+        _ => unimplemented!()
     };
 
     // Build up the request structure
     let request = Request {
-        path: path
+        method: token.method(),
+        path: path,
     };
 
     // Send it over to the application
@@ -45,18 +48,24 @@ pub enum WorkerResponse {
 }
 
 pub struct RequestToken {
+    method: Method,
     uri: RequestUri,
     ctrl: Control,
     sender: Sender<WorkerResponse>,
 }
 
 impl RequestToken {
-    pub fn new(uri: RequestUri, ctrl: Control, sender: Sender<WorkerResponse>) -> Self {
+    pub fn new(method: Method, uri: RequestUri, ctrl: Control, sender: Sender<WorkerResponse>) -> Self {
         RequestToken {
+            method: method,
             uri: uri,
             ctrl: ctrl,
             sender: sender,
         }
+    }
+
+    fn method(&self) -> Method {
+        self.method.clone()
     }
 
     fn uri(&self) -> &RequestUri {

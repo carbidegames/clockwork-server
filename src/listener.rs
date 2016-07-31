@@ -5,6 +5,7 @@ use crossbeam::sync::MsQueue;
 use hyper::{Control, Decoder, Encoder, Next, RequestUri};
 use hyper::net::{HttpStream, HttpListener};
 use hyper::server::{Server, Handler, Request, Response};
+use webapp::method::Method;
 use worker::{WorkerCommand, RequestToken, WorkerResponse};
 
 pub fn run_listener(listener: HttpListener, queue: Arc<MsQueue<WorkerCommand>>) {
@@ -26,6 +27,7 @@ pub fn run_listener(listener: HttpListener, queue: Arc<MsQueue<WorkerCommand>>) 
 
 pub struct HyperHandler {
     // TODO: Consider replacing these Options with a state instead
+    method: Option<Method>,
     uri: Option<RequestUri>,
     ctrl: Option<Control>,
     queue: Arc<MsQueue<WorkerCommand>>,
@@ -37,6 +39,7 @@ pub struct HyperHandler {
 impl HyperHandler {
     pub fn new(ctrl: Control, queue: Arc<MsQueue<WorkerCommand>>) -> Self {
         HyperHandler {
+            method: None,
             uri: None,
             ctrl: Some(ctrl),
             queue: queue,
@@ -60,6 +63,7 @@ impl HyperHandler {
 
 impl Handler<HttpStream> for HyperHandler {
     fn on_request(&mut self, req: Request<HttpStream>) -> Next {
+        self.method = Some(req.method().clone());
         self.uri = Some(req.uri().clone());
         Next::read()
     }
@@ -74,6 +78,7 @@ impl Handler<HttpStream> for HyperHandler {
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         let token = RequestToken::new(
+            self.method.take().unwrap(),
             self.uri.take().unwrap(),
             self.ctrl.take().unwrap(),
             sender
