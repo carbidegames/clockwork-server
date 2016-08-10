@@ -29,6 +29,8 @@ pub struct HyperHandler {
     // TODO: Consider replacing these Options with a state instead
     method: Option<Method>,
     uri: Option<RequestUri>,
+    data: Option<Vec<u8>>,
+
     ctrl: Option<Control>,
     queue: Arc<MsQueue<WorkerCommand>>,
     receiver: Option<Receiver<WorkerResponse>>,
@@ -41,6 +43,8 @@ impl HyperHandler {
         HyperHandler {
             method: None,
             uri: None,
+            data: None,
+
             ctrl: Some(ctrl),
             queue: queue,
             receiver: None,
@@ -65,28 +69,75 @@ impl Handler<HttpStream> for HyperHandler {
     fn on_request(&mut self, req: Request<HttpStream>) -> Next {
         self.method = Some(req.method().clone());
         self.uri = Some(req.uri().clone());
+        self.data = Some(Vec::new());
         Next::read()
     }
 
-    fn on_request_readable(&mut self, _request: &mut Decoder<HttpStream>) -> Next {
-        // TODO: Actually read the data
-        // @seanmonstar: So, once read returns WouldBlock, and you don't have all the data, you
-        //  can return Next::read() and you'll be notified when it's ready again
+    fn on_request_readable(&mut self, request: &mut Decoder<HttpStream>) -> Next {
+        let done = {
+            // Get the data buffer and check what its new size would be
+            let data = self.data.as_mut().unwrap();
+            let start = data.len();
+            let end = start + 4096;
 
-        // Queue up a worker task
-        // TODO: Refactor task queueing into a nice wrapper
-        let (sender, receiver) = mpsc::channel();
-        self.receiver = Some(receiver);
-        let token = RequestToken::new(
-            self.method.take().unwrap(),
-            self.uri.take().unwrap(),
-            self.ctrl.take().unwrap(),
-            sender
-        );
-        self.queue.push(WorkerCommand::HandleRequest(token));
+            // Avoid allocating way too much data, we're limiting to 8MB by default
+            // TODO: Gracefully handle this with a warning sent to the client
+            // TODO: Switch to temp file at 1MB and allow handling more data
+            if end > 8388608 + 4096 {
+                return Next::end();
+            }
 
-        // We need to wait till we get notified by the worker that we're done
-        Next::wait()
+            // Read in all the data we have currently available
+            data.resize(end, 0);
+            match request.try_read(&mut data[start..]) {
+                Ok(Some(0)) => {
+                    // This means the client has no more data for us
+                    data.shrink_to_fit();
+                    true
+                },
+                Ok(Some(n)) => {
+                    // Trim away the end
+                    data.truncate(start+n);
+
+                    // More data is probably available
+                    // TODO: Handle content size header so we can early bail here
+                    false
+                }
+                Ok(None) => {
+                    // Trim away the end
+                    data.truncate(start);
+
+                    // Why did you even call us? gosh! More data is probably available
+                    false
+                }
+                Err(e) => {
+                    error!("read error {:?}", e);
+                    return Next::end();
+                }
+            }
+        };
+
+        // Check if we're done
+        if done {
+            // Queue up a worker task
+            // TODO: Refactor task queueing into a nice wrapper
+            let (sender, receiver) = mpsc::channel();
+            self.receiver = Some(receiver);
+            let token = RequestToken::new(
+                self.method.take().unwrap(),
+                self.uri.take().unwrap(),
+                self.data.take().unwrap(),
+
+                self.ctrl.take().unwrap(),
+                sender
+            );
+            self.queue.push(WorkerCommand::HandleRequest(token));
+
+            // We need to wait till we get notified by the worker that we're done
+            Next::wait()
+        } else {
+            Next::read()
+        }
     }
 
     fn on_response(&mut self, response: &mut Response) -> Next {

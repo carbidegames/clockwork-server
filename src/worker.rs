@@ -30,6 +30,7 @@ fn handle_request<A: Application>(token: RequestToken, application: &A) {
     let request = Request {
         method: token.method(),
         path: path,
+        body: token.body().clone(), // TODO: Avoid a copy
     };
 
     // Send it over to the application
@@ -50,15 +51,17 @@ pub enum WorkerResponse {
 pub struct RequestToken {
     method: Method,
     uri: RequestUri,
+    body: Vec<u8>,
     ctrl: Control,
     sender: Sender<WorkerResponse>,
 }
 
 impl RequestToken {
-    pub fn new(method: Method, uri: RequestUri, ctrl: Control, sender: Sender<WorkerResponse>) -> Self {
+    pub fn new(method: Method, uri: RequestUri, body: Vec<u8>, ctrl: Control, sender: Sender<WorkerResponse>) -> Self {
         RequestToken {
             method: method,
             uri: uri,
+            body: body,
             ctrl: ctrl,
             sender: sender,
         }
@@ -70,6 +73,10 @@ impl RequestToken {
 
     fn uri(&self) -> &RequestUri {
         &self.uri
+    }
+
+    fn body(&self) -> &Vec<u8> {
+        &self.body
     }
 
     fn send_header(&mut self, status_code: StatusCode, headers: Headers) {
