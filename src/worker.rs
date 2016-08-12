@@ -22,8 +22,7 @@ fn handle_request<A: Application>(token: RequestToken, application: &A) {
     // Get the path from the request
     let path = match token.uri() {
         &RequestUri::AbsolutePath(ref path) => path.to_string(),
-        // TODO: IMPORTANT FOR PRODUCTION do not panic
-        _ => unimplemented!()
+        _ => "/".into() // TODO: This is a placeholder
     };
 
     // Build up the request structure

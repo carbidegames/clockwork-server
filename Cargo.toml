@@ -8,4 +8,4 @@ crossbeam = "0.2.9"
 hyper = {git = "https://github.com/hyperium/hyper.git"}
 log = "0.3.6"
 num_cpus = "0.2.13"
-webapp = {path = "../webapp"}
+webapp = {git = "https://github.com/carbidegames/webapp.git"}
