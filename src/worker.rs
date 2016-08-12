@@ -19,6 +19,8 @@ pub fn run_worker<A: Application>(queue: Arc<MsQueue<WorkerCommand>>, applicatio
 fn handle_request<A: Application>(token: RequestToken, application: &A) {
     // TODO: Timeout connections if we receive them X amount of time after they're queued
 
+    info!("{} at {}", token.method(), token.uri());
+
     // Get the path from the request
     let path = match token.uri() {
         &RequestUri::AbsolutePath(ref path) => path.to_string(),
