@@ -92,6 +92,7 @@ impl Handler<HttpStream> for HyperHandler {
             match request.try_read(&mut data[start..]) {
                 Ok(Some(0)) => {
                     // This means the client has no more data for us
+                    data.truncate(start);
                     data.shrink_to_fit();
                     true
                 },
